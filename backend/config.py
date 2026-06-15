@@ -21,4 +21,5 @@ VERTEX_AI_MODEL_FALLBACK = "gemini-1.0-pro"
 # Load from environment
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "footprints")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 IS_GCP = bool(GOOGLE_CLOUD_PROJECT) and bool(os.getenv("K_SERVICE"))

@@ -1,16 +1,18 @@
 import json
 import logging
 import hashlib
+import httpx
 from backend.config import (
     GOOGLE_CLOUD_PROJECT,
     VERTEX_AI_LOCATION,
     VERTEX_AI_MODEL_PRIMARY,
     VERTEX_AI_MODEL_FALLBACK,
+    GEMINI_API_KEY,
 )
 
 logger = logging.getLogger("ecotrack")
 
-# Simple in-memory cache for duplicate Vertex AI queries within same context and session
+# Simple in-memory cache for duplicate Vertex AI / Gemini API queries within same context and session
 _ai_cache = {}
 
 def _get_cache_key(message: str, footprint_context: dict | None, session_id: str) -> str:
@@ -92,8 +94,83 @@ def get_safety_settings():
         ),
     ]
 
+async def _call_gemini_rest(
+    model_name: str,
+    prompt: str,
+    system_instruction: str = None,
+    response_mime_type: str = None,
+    temperature: float = 0.7,
+    max_output_tokens: int = 300
+) -> str:
+    """Call the direct Google Gemini Developer API using the provided API key."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+        }
+    }
+    
+    if system_instruction:
+        payload["systemInstruction"] = {
+            "parts": [
+                {"text": system_instruction}
+            ]
+        }
+        
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
+        
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    logger.info(f"Querying Gemini REST API for model '{model_name}'...")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        if response.status_code != 200:
+            logger.error(f"Gemini REST API returned error status {response.status_code}: {response.text}")
+            raise Exception(f"Gemini REST API error {response.status_code}: {response.text}")
+            
+        data = response.json()
+        try:
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise ValueError("No candidates returned from Gemini REST API")
+            
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if not parts:
+                raise ValueError("No text content found in candidates parts")
+                
+            return parts[0].get("text", "").strip()
+        except Exception as e:
+            logger.error(f"Failed to parse Gemini REST API response: {str(e)}")
+            raise
+
 async def _call_gemini(model_name: str, prompt: str) -> str:
-    """Call a specific Gemini model and return text response."""
+    """Call a specific Gemini model using REST API (if key present) or Vertex AI."""
+    if GEMINI_API_KEY:
+        try:
+            return await _call_gemini_rest(
+                model_name=model_name,
+                prompt=prompt,
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.7,
+                max_output_tokens=300
+            )
+        except Exception as e:
+            logger.warning(f"Gemini REST API failed, trying Vertex AI fallback: {str(e)}")
+            # Fallthrough to Vertex AI
+            
+    # Vertex AI fallback
     _lazy_import_vertex()
     model = _GenerativeModel(
         model_name,
@@ -101,19 +178,16 @@ async def _call_gemini(model_name: str, prompt: str) -> str:
         generation_config=get_generation_config(),
         safety_settings=get_safety_settings(),
     )
-    # Using async call for FastAPI compatibility
     response = await model.generate_content_async(prompt)
     return response.text
 
 async def get_ai_response(message: str, footprint_context: dict | None, session_id: str) -> tuple[str, str]:
     """
-    Get AI response from Vertex AI Gemini.
+    Get AI response from Vertex AI Gemini or Gemini REST API.
     1. Try gemini-1.5-flash (primary, faster + cheaper)
     2. On failure, fallback to gemini-1.0-pro
     3. On both failing, return friendly static message
     Returns: (reply_text, model_used_string)
-    
-    Log which model responded via Cloud Logging.
     """
     # 0. Check cache first for efficiency
     cache_key = _get_cache_key(message, footprint_context, session_id)
@@ -155,11 +229,9 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
 
 async def get_ai_tips(input_data: dict, breakdown: dict) -> list[dict]:
     """
-    Generate 5 personalized carbon reduction tips using Vertex AI Gemini.
+    Generate 5 personalized carbon reduction tips using Gemini (REST API or Vertex AI).
     Returns a list of dictionaries matching the Tip structure.
     """
-    _lazy_import_vertex()
-    
     prompt = f"""You are a carbon footprint expert.
 Based on the user's consumption inputs:
 - Transport mode: {input_data.get('transport_mode')} ({input_data.get('transport_km_per_week')} km/week)
@@ -183,16 +255,31 @@ Your response must be a valid JSON array of objects, where each object has exact
 
 Return ONLY a JSON array of objects. Do not include markdown formatting or wrapper (like ```json).
 """
-    
-    model = _GenerativeModel(
-        VERTEX_AI_MODEL_PRIMARY,
-        generation_config=get_generation_config(temperature=0.2, max_output_tokens=800, response_mime_type="application/json"),
-        safety_settings=get_safety_settings(),
-    )
-    
-    logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized tips...")
-    response = await model.generate_content_async(prompt)
-    text = response.text.strip()
+
+    text = None
+    if GEMINI_API_KEY:
+        try:
+            text = await _call_gemini_rest(
+                model_name=VERTEX_AI_MODEL_PRIMARY,
+                prompt=prompt,
+                response_mime_type="application/json",
+                temperature=0.2,
+                max_output_tokens=800
+            )
+            logger.info("Successfully fetched tips using direct Gemini REST API.")
+        except Exception as e:
+            logger.warning(f"Direct Gemini REST API tips failed: {str(e)}. Falling back to Vertex AI.")
+
+    if text is None:
+        _lazy_import_vertex()
+        model = _GenerativeModel(
+            VERTEX_AI_MODEL_PRIMARY,
+            generation_config=get_generation_config(temperature=0.2, max_output_tokens=800, response_mime_type="application/json"),
+            safety_settings=get_safety_settings(),
+        )
+        logger.info(f"Querying Vertex AI model '{VERTEX_AI_MODEL_PRIMARY}' for personalized tips...")
+        response = await model.generate_content_async(prompt)
+        text = response.text.strip()
     
     # Parse and validate JSON
     parsed = json.loads(text)
@@ -231,10 +318,8 @@ Return ONLY a JSON array of objects. Do not include markdown formatting or wrapp
 
 async def get_ai_insights(input_data: dict, breakdown: dict) -> str:
     """
-    Generate a 2-3 sentence personalized carbon footprint insight using Vertex AI Gemini.
+    Generate a 2-3 sentence personalized carbon footprint insight using Gemini (REST API or Vertex AI).
     """
-    _lazy_import_vertex()
-    
     prompt = f"""You are a friendly and encouraging carbon footprint expert.
 Based on the user's consumption inputs:
 - Transport mode: {input_data.get('transport_mode')} ({input_data.get('transport_km_per_week')} km/week)
@@ -253,13 +338,29 @@ Write exactly 2-3 sentences of personalized, constructive insights.
 Identify their highest emission category, highlight how they are doing (using positive reinforcement if possible), and suggest one high-impact change they can make to improve.
 Keep it encouraging, specific, and under 80 words. Do not use any markdown formatting or lists.
 """
-    
-    model = _GenerativeModel(
-        VERTEX_AI_MODEL_PRIMARY,
-        generation_config=get_generation_config(temperature=0.7, max_output_tokens=150),
-        safety_settings=get_safety_settings(),
-    )
-    
-    logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized dashboard insights...")
-    response = await model.generate_content_async(prompt)
-    return response.text.strip()
+
+    text = None
+    if GEMINI_API_KEY:
+        try:
+            text = await _call_gemini_rest(
+                model_name=VERTEX_AI_MODEL_PRIMARY,
+                prompt=prompt,
+                temperature=0.7,
+                max_output_tokens=150
+            )
+            logger.info("Successfully fetched insights using direct Gemini REST API.")
+        except Exception as e:
+            logger.warning(f"Direct Gemini REST API insights failed: {str(e)}. Falling back to Vertex AI.")
+
+    if text is None:
+        _lazy_import_vertex()
+        model = _GenerativeModel(
+            VERTEX_AI_MODEL_PRIMARY,
+            generation_config=get_generation_config(temperature=0.7, max_output_tokens=150),
+            safety_settings=get_safety_settings(),
+        )
+        logger.info(f"Querying Vertex AI model '{VERTEX_AI_MODEL_PRIMARY}' for personalized dashboard insights...")
+        response = await model.generate_content_async(prompt)
+        text = response.text.strip()
+        
+    return text
