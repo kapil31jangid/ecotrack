@@ -66,14 +66,13 @@ export function useFootprint() {
     localStorage.setItem("ecotrack_chat", JSON.stringify(chatMessages));
   }, [chatMessages]);
 
-  // Proactive DB sync on mount
+  // Proactive DB sync on mount + polling every 30s for real-time updates
   useEffect(() => {
     let active = true;
     async function syncHistory() {
       try {
         const remoteHistory = await getHistory(sessionId);
         if (active && remoteHistory && remoteHistory.length > 0) {
-          // Map to match structure of calculated logs
           const normalized = remoteHistory.map(h => ({
             co2e_monthly: h.co2e_monthly,
             co2e_annual: h.co2e_annual,
@@ -92,8 +91,11 @@ export function useFootprint() {
       }
     }
     syncHistory();
+    // Poll every 30 seconds for real-time dashboard updates
+    const interval = setInterval(syncHistory, 30000);
     return () => {
       active = false;
+      clearInterval(interval);
     };
   }, [sessionId]);
 
@@ -188,9 +190,12 @@ export function useFootprint() {
         shopping_level: formData.shopping_level,
       };
       const result = await calculateFootprint(payload);
-      
-      // Append new log to history state
-      setHistory((prev) => [...prev, result]);
+      // Immediately update local state with fresh result
+      setHistory((prev) => {
+        const updated = [...prev, result];
+        // Keep only last 20 entries
+        return updated.slice(-20);
+      });
       return result;
     } catch (err) {
       setError(err.message);

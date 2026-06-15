@@ -99,9 +99,32 @@ export default function AiChat({ chatMessages, onSendMessage, isChatLoading, err
                 🌱
               </div>
               <div className="bg-white border border-green-500/5 rounded-2xl rounded-tl-none p-3 shadow-sm text-xs text-gray-700 leading-relaxed max-w-[85%]">
-                Hi! I'm EcoTrack AI, powered by Google Gemini 🌱 I can see your carbon data. What would you like to reduce first?
+                Hi! I'm EcoTrack AI, powered by Google Gemini 🌱 I can answer any sustainability question and analyse your carbon data. What would you like to explore?
               </div>
             </div>
+
+            {/* Suggestion chips — only show when chat is empty */}
+            {chatMessages.length === 0 && !isChatLoading && (
+              <div className="flex flex-wrap gap-1.5 px-1">
+                {[
+                  "How can I reduce my energy bill?",
+                  "Is an EV worth it?",
+                  "Best ways to reduce diet emissions?",
+                  "What is a carbon offset?",
+                  "How does solar energy work?",
+                ].map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    onClick={() => {
+                      setInputMessage(suggestion);
+                    }}
+                    className="text-[10px] font-semibold px-2.5 py-1 bg-primary/8 border border-primary/20 text-primary rounded-full hover:bg-primary/15 transition-colors focus:outline-none"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Chat history logs */}
             {chatMessages.map((msg) => {
