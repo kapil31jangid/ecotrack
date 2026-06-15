@@ -25,7 +25,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from backend.config import APP_VERSION, GOOGLE_CLOUD_PROJECT, VERTEX_AI_LOCATION
+from backend.config import APP_VERSION, GOOGLE_CLOUD_PROJECT
 from backend.models import (
     FootprintInput,
     FootprintResult,
@@ -46,7 +46,7 @@ from backend.firestore_service import (
 from backend.logging_service import setup_logging, setup_tracing, get_tracer
 
 # 100% Google AI provider declaration
-AI_PROVIDER = "Google Vertex AI Gemini"
+AI_PROVIDER = "Google Gemini AI (REST API)"
 
 # Rate Limiter setup
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])

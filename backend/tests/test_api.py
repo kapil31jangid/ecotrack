@@ -22,7 +22,7 @@ def test_health_endpoint():
     data = response.json()
     assert data["status"] == "ok"
     assert "version" in data
-    assert data["ai_provider"] == "Google Vertex AI Gemini"
+    assert data["ai_provider"] == "Google Gemini AI (REST API)"
 
 def test_calculate_endpoint():
     payload = {
