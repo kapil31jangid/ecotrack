@@ -15,8 +15,8 @@ APP_VERSION = "1.0.0"
 
 # Vertex AI config — 100% Google, zero Anthropic
 VERTEX_AI_LOCATION = "asia-south1"
-VERTEX_AI_MODEL_PRIMARY = "gemini-2.5-flash"
-VERTEX_AI_MODEL_FALLBACK = "gemini-2.5-flash"
+VERTEX_AI_MODEL_PRIMARY = "gemini-1.5-flash"
+VERTEX_AI_MODEL_FALLBACK = "gemini-1.0-pro"
 
 # Load from environment
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")

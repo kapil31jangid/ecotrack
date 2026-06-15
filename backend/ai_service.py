@@ -21,16 +21,20 @@ from typing import Optional
 
 import httpx
 
-from backend.config import GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY
+from backend.config import (
+    GOOGLE_CLOUD_PROJECT,
+    GEMINI_API_KEY,
+    VERTEX_AI_LOCATION,
+    VERTEX_AI_MODEL_PRIMARY,
+    VERTEX_AI_MODEL_FALLBACK,
+)
 
 __all__ = ["get_ai_response", "get_ai_tips", "get_ai_insights"]
 
 logger = logging.getLogger("ecotrack")
 
 # ── Model identifiers ─────────────────────────────────────────────────────────
-VERTEX_LOCATION  = "us-central1"
-VERTEX_MODEL     = "gemini-2.5-flash"
-GEMINI_API_MODEL = "gemini-2.5-flash"
+VERTEX_LOCATION  = VERTEX_AI_LOCATION
 GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 
 # ── Token budget constants ─────────────────────────────────────────────────────
@@ -96,6 +100,7 @@ def _parse_gemini_response(data: dict) -> str:
 
 # ── Path 1: Vertex AI REST ────────────────────────────────────────────────────
 async def _call_vertex_ai(
+    model: str,
     prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int = _CHAT_MAX_TOKENS,
@@ -110,7 +115,7 @@ async def _call_vertex_ai(
     url = (
         f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/"
         f"projects/{project}/locations/{VERTEX_LOCATION}/"
-        f"publishers/google/models/{VERTEX_MODEL}:generateContent"
+        f"publishers/google/models/{model}:generateContent"
     )
 
     payload: dict = {
@@ -118,10 +123,11 @@ async def _call_vertex_ai(
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    if response_mime_type:
+    if any(m in model for m in ["2.0", "2.5"]):
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    if response_mime_type and "1.0-pro" not in model:
         payload["generationConfig"]["responseMimeType"] = response_mime_type
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -142,6 +148,7 @@ async def _call_vertex_ai(
 
 # ── Path 2: Gemini Developer API ──────────────────────────────────────────────
 async def _call_gemini_api(
+    model: str,
     prompt: str,
     temperature: float = 0.7,
     max_output_tokens: int = _CHAT_MAX_TOKENS,
@@ -151,16 +158,17 @@ async def _call_gemini_api(
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set")
 
-    url = f"{GEMINI_API_BASE}/{GEMINI_API_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    url = f"{GEMINI_API_BASE}/{model}:generateContent?key={GEMINI_API_KEY}"
     payload: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    if response_mime_type:
+    if any(m in model for m in ["2.0", "2.5"]):
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    if response_mime_type and "1.0-pro" not in model:
         payload["generationConfig"]["responseMimeType"] = response_mime_type
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -179,22 +187,38 @@ async def _call_ai(
     max_output_tokens: int = _CHAT_MAX_TOKENS,
     response_mime_type: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Returns (text, model_used). Tries Vertex AI then Gemini API key."""
-    # Try Vertex AI (works automatically on Cloud Run via service account)
+    """Returns (text, model_used). Tries Vertex AI then Gemini API key, respecting primary/fallback hierarchy."""
+    # 1. Try Vertex AI with Primary Model
     try:
-        text = await _call_vertex_ai(prompt, temperature, max_output_tokens, response_mime_type)
-        logger.info("AI response via Vertex AI REST")
-        return text, VERTEX_MODEL
+        text = await _call_vertex_ai(VERTEX_AI_MODEL_PRIMARY, prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info(f"AI response via Vertex AI REST (primary: {VERTEX_AI_MODEL_PRIMARY})")
+        return text, VERTEX_AI_MODEL_PRIMARY
     except Exception as e:
-        logger.warning(f"Vertex AI failed: {e}")
+        logger.warning(f"Vertex AI (primary: {VERTEX_AI_MODEL_PRIMARY}) failed: {e}")
 
-    # Try Gemini Developer API key
+    # 2. Try Vertex AI with Fallback Model
     try:
-        text = await _call_gemini_api(prompt, temperature, max_output_tokens, response_mime_type)
-        logger.info("AI response via Gemini Developer API")
-        return text, GEMINI_API_MODEL
+        text = await _call_vertex_ai(VERTEX_AI_MODEL_FALLBACK, prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info(f"AI response via Vertex AI REST (fallback: {VERTEX_AI_MODEL_FALLBACK})")
+        return text, VERTEX_AI_MODEL_FALLBACK
     except Exception as e:
-        logger.warning(f"Gemini API key failed: {e}")
+        logger.warning(f"Vertex AI (fallback: {VERTEX_AI_MODEL_FALLBACK}) failed: {e}")
+
+    # 3. Try Gemini Developer API with Primary Model
+    try:
+        text = await _call_gemini_api(VERTEX_AI_MODEL_PRIMARY, prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info(f"AI response via Gemini Developer API (primary: {VERTEX_AI_MODEL_PRIMARY})")
+        return text, VERTEX_AI_MODEL_PRIMARY
+    except Exception as e:
+        logger.warning(f"Gemini API (primary: {VERTEX_AI_MODEL_PRIMARY}) failed: {e}")
+
+    # 4. Try Gemini Developer API with Fallback Model
+    try:
+        text = await _call_gemini_api(VERTEX_AI_MODEL_FALLBACK, prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info(f"AI response via Gemini Developer API (fallback: {VERTEX_AI_MODEL_FALLBACK})")
+        return text, VERTEX_AI_MODEL_FALLBACK
+    except Exception as e:
+        logger.warning(f"Gemini API (fallback: {VERTEX_AI_MODEL_FALLBACK}) failed: {e}")
 
     raise RuntimeError("All AI providers failed")
 

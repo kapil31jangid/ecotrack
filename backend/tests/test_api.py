@@ -104,10 +104,10 @@ def test_chat_endpoint_mocked():
         }
     }
     with patch("backend.main.get_ai_response", new_callable=AsyncMock) as mocked_service:
-        mocked_service.return_value = ("Mock reply from Gemini AI", "gemini-2.5-flash")
+        mocked_service.return_value = ("Mock reply from Gemini AI", "gemini-1.5-flash")
         response = client.post("/api/chat", json=payload)
         assert response.status_code == 200
         data = response.json()
         assert data["reply"] == "Mock reply from Gemini AI"
-        assert data["model_used"] == "gemini-2.5-flash"
+        assert data["model_used"] == "gemini-1.5-flash"
         assert data["session_id"] == "test-session-123"

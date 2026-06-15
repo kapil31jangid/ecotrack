@@ -16,16 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ── Stage 3: Runtime — single Uvicorn process on port 8080 ─────
+# ── Stage 3: Runtime — nginx + uvicorn via supervisord ─────────
 FROM python:3.11-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx supervisor curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/log/supervisor /tmp/nginx
 
 COPY --from=python-builder /install /usr/local
 WORKDIR /app
 COPY backend/ ./backend/
-COPY --from=node-builder /app/frontend/dist ./frontend/dist
+COPY --from=node-builder /app/frontend/dist /usr/share/nginx/html
+COPY deploy/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
@@ -34,4 +38,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD curl -f http://localhost:8080/api/health || exit 1
 
-CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
