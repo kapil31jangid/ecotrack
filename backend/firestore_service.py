@@ -7,16 +7,26 @@ from backend.config import GOOGLE_CLOUD_PROJECT, FIRESTORE_COLLECTION
 
 logger = logging.getLogger("ecotrack")
 
-# Initialize AsyncClient if GOOGLE_CLOUD_PROJECT is provided
-db = None
-try:
+# Lazy-initialized AsyncClient
+_db_client = None
+_db_initialized = False
+
+def get_db():
+    global _db_client, _db_initialized
+    if _db_initialized:
+        return _db_client
     if GOOGLE_CLOUD_PROJECT:
-        db = firestore.AsyncClient(project=GOOGLE_CLOUD_PROJECT)
-        logger.info(f"Firestore client successfully initialized for project: {GOOGLE_CLOUD_PROJECT}")
+        try:
+            _db_client = firestore.AsyncClient(project=GOOGLE_CLOUD_PROJECT)
+            logger.info(f"Firestore client successfully initialized for project: {GOOGLE_CLOUD_PROJECT}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Firestore Client: {str(e)}")
+            _db_client = None
     else:
         logger.warning("GOOGLE_CLOUD_PROJECT environment variable not set. Firestore will run in mock mode.")
-except Exception as e:
-    logger.error(f"Failed to initialize Firestore Client: {str(e)}")
+        _db_client = None
+    _db_initialized = True
+    return _db_client
 
 # Local store for fallback mock mode
 _local_footprints = {}
@@ -31,6 +41,7 @@ async def save_footprint(session_id: str, input_data: dict, result: dict) -> boo
         "result": result,
     }
 
+    db = get_db()
     if db:
         try:
             doc_data["timestamp"] = SERVER_TIMESTAMP
@@ -44,11 +55,12 @@ async def save_footprint(session_id: str, input_data: dict, result: dict) -> boo
         # Fallback to local store
         doc_data["timestamp"] = datetime.utcnow().isoformat()
         _local_footprints.setdefault(session_id, []).append(doc_data)
-        logger.info(f"Saved footprint to local in-memory store for session: {session_id}")
+        logger.info(f"Saved footprint to in-memory store for session: {session_id}")
         return True
 
 async def get_footprint_history(session_id: str) -> list[dict]:
     """Get all records for session ordered by timestamp asc. Return [] if none."""
+    db = get_db()
     if db:
         try:
             query = db.collection(FIRESTORE_COLLECTION).where("session_id", "==", session_id).limit(100)
@@ -84,6 +96,7 @@ async def save_chat_message(session_id: str, role: str, content: str, model_used
         "model_used": model_used,
     }
 
+    db = get_db()
     if db:
         try:
             msg_data["timestamp"] = SERVER_TIMESTAMP
@@ -103,6 +116,7 @@ async def aggregate_weekly_stats() -> dict:
     Return the stats dict.
     """
     all_docs = []
+    db = get_db()
     if db:
         try:
             query = db.collection(FIRESTORE_COLLECTION)

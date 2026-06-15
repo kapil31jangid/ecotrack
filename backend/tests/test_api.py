@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import backend.firestore_service
 # Force fallback to local store for reliability and speed during API tests
-backend.firestore_service.db = None
+backend.firestore_service._db_initialized = True
+backend.firestore_service._db_client = None
 
 from fastapi.testclient import TestClient
 from backend.main import app
