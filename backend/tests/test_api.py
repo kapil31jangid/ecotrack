@@ -32,12 +32,41 @@ def test_calculate_endpoint():
         "energy_kwh_per_month": 120.0,
         "shopping_level": "low"
     }
-    response = client.post("/api/calculate", json=payload)
-    assert response.status_code == 200
-    data = response.json()
-    assert "co2e_monthly" in data
-    assert "co2e_annual" in data
-    assert data["session_id"] == "test-session-123"
+    mock_tips = [
+        {"action": "Use a bicycle", "saving_kg": 25.0, "difficulty": "Easy", "category": "transport"},
+        {"action": "Eat home cooked meals", "saving_kg": 15.0, "difficulty": "Easy", "category": "diet"},
+        {"action": "Use solar chargers", "saving_kg": 10.0, "difficulty": "Medium", "category": "energy"},
+        {"action": "Buy items in bulk", "saving_kg": 5.0, "difficulty": "Easy", "category": "shopping"},
+        {"action": "Turn off AC when leaving", "saving_kg": 20.0, "difficulty": "Easy", "category": "energy"},
+    ]
+    with patch("backend.main.get_ai_tips", new_callable=AsyncMock) as mocked_tips_service:
+        mocked_tips_service.return_value = mock_tips
+        response = client.post("/api/calculate", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert "co2e_monthly" in data
+        assert "co2e_annual" in data
+        assert data["session_id"] == "test-session-123"
+        assert len(data["tips"]) == 5
+        assert data["tips"][0]["action"] == "Use a bicycle"
+
+def test_calculate_endpoint_fallback():
+    payload = {
+        "session_id": "test-session-123",
+        "transport_mode": "car",
+        "transport_km_per_week": 150.0,
+        "diet_type": "vegan",
+        "energy_kwh_per_month": 120.0,
+        "shopping_level": "low"
+    }
+    with patch("backend.main.get_ai_tips", side_effect=Exception("Vertex AI Error")):
+        response = client.post("/api/calculate", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert "co2e_monthly" in data
+        assert len(data["tips"]) == 5
+        # Verification that fallback is rule-based tips
+        assert any(t["action"] == "Switch to public transport" for t in data["tips"])
 
 def test_history_endpoint():
     response = client.get("/api/history/test-session-123")

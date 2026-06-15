@@ -144,3 +144,88 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
                 "Let me know if you want detailed suggestions on transportation, diet, or home energy saving!"
             )
             return static_reply, "static-fallback"
+
+
+async def get_ai_tips(input_data: dict, breakdown: dict) -> list[dict]:
+    """
+    Generate 5 personalized carbon reduction tips using Vertex AI Gemini.
+    Returns a list of dictionaries matching the Tip structure.
+    """
+    _initialize_vertex()
+    
+    prompt = f"""You are a carbon footprint expert.
+Based on the user's consumption inputs:
+- Transport mode: {input_data.get('transport_mode')} ({input_data.get('transport_km_per_week')} km/week)
+- Diet type: {input_data.get('diet_type')}
+- Electricity: {input_data.get('energy_kwh_per_month')} kWh/month
+- Shopping level: {input_data.get('shopping_level')}
+
+And their calculated monthly emissions breakdown (in kg CO2e):
+- Transport: {breakdown.get('transport', 0.0)} kg
+- Diet: {breakdown.get('diet', 0.0)} kg
+- Energy: {breakdown.get('energy', 0.0)} kg
+- Shopping: {breakdown.get('shopping', 0.0)} kg
+- Total monthly footprint: {breakdown.get('transport', 0.0) + breakdown.get('diet', 0.0) + breakdown.get('energy', 0.0) + breakdown.get('shopping', 0.0)} kg
+
+Provide exactly 5 highly personalized, concrete, actionable tips to reduce their carbon footprint.
+Your response must be a valid JSON array of objects, where each object has exactly these fields:
+- "action": string, description of the action.
+- "saving_kg": float, estimated monthly CO2e savings in kg, must be a positive number.
+- "difficulty": string, one of "Easy", "Medium", "Hard".
+- "category": string, one of "transport", "diet", "energy", "shopping".
+
+Return ONLY a JSON array of objects. Do not include markdown formatting or wrapper (like ```json).
+"""
+    
+    # Configure Gemini to return JSON
+    generation_config = GenerationConfig(
+        temperature=0.2,
+        max_output_tokens=800,
+        response_mime_type="application/json"
+    )
+    
+    model = GenerativeModel(
+        VERTEX_AI_MODEL_PRIMARY,
+        generation_config=generation_config,
+        safety_settings=SAFETY_SETTINGS,
+    )
+    
+    logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized tips...")
+    response = await model.generate_content_async(prompt)
+    text = response.text.strip()
+    
+    # Parse and validate JSON
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise ValueError("AI response is not a list")
+        
+    # Standardize/validate fields
+    validated_tips = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        # Ensure correct keys and defaults
+        action = str(item.get("action", ""))
+        saving_kg = float(item.get("saving_kg", 0.0))
+        difficulty = item.get("difficulty", "Medium")
+        if difficulty not in ["Easy", "Medium", "Hard"]:
+            difficulty = "Medium"
+        category = str(item.get("category", "")).lower()
+        if category not in ["transport", "diet", "energy", "shopping"]:
+            category = "energy"
+            
+        if not action or saving_kg <= 0:
+            continue
+            
+        validated_tips.append({
+            "action": action,
+            "saving_kg": saving_kg,
+            "difficulty": difficulty,
+            "category": category
+        })
+        
+    if len(validated_tips) < 3:
+        raise ValueError(f"AI returned only {len(validated_tips)} valid tips, which is insufficient.")
+        
+    return validated_tips[:5]
+

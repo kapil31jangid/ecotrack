@@ -36,7 +36,7 @@ from backend.models import (
     Tip,
 )
 from backend.calculator import calculate_total_footprint
-from backend.ai_service import get_ai_response
+from backend.ai_service import get_ai_response, get_ai_tips
 from backend.firestore_service import (
     save_footprint,
     get_footprint_history,
@@ -159,6 +159,17 @@ async def calculate_footprint_endpoint(input_data: FootprintInput) -> FootprintR
     with tracer.start_as_current_span("calculate_footprint"):
         # Run calculation
         result_dict = calculate_total_footprint(input_data.model_dump())
+        
+        # Override tips with Gemini AI tips if possible
+        try:
+            ai_tips = await get_ai_tips(input_data.model_dump(), result_dict["category_breakdown"])
+            result_dict["tips"] = ai_tips
+            logging.getLogger("ecotrack").info(f"Successfully generated Gemini AI tips for session: {input_data.session_id}")
+        except Exception as e:
+            logging.getLogger("ecotrack").warning(
+                f"Failed to generate Gemini AI tips for session {input_data.session_id}: {str(e)}. "
+                f"Falling back to local rule-based tips."
+            )
         
         # Add session and timestamp to response
         result_dict["session_id"] = input_data.session_id
