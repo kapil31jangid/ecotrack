@@ -15,9 +15,10 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 
@@ -67,6 +68,11 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# Mount static frontend files if the dist folder exists (production container)
+_frontend_dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
+if os.path.isdir(_frontend_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_frontend_dist, "assets")), name="assets")
 
 # Configure Limiter
 app.state.limiter = limiter
@@ -259,3 +265,12 @@ async def aggregate_stats_endpoint(x_scheduler_job: str | None = Header(None, al
     
     stats = await aggregate_weekly_stats()
     return {"status": "ok", "stats": stats}
+
+# ── Serve React frontend for all non-API routes ──────────────────────────────
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_spa(full_path: str):
+    """Serve the React SPA index.html for all non-API routes (client-side routing)."""
+    index_file = os.path.join(_frontend_dist, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file, media_type="text/html")
+    return JSONResponse(status_code=404, content={"error": "Frontend not found"})
