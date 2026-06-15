@@ -1,28 +1,37 @@
 """
-EcoTrack AI Service — uses Google Gemini Developer REST API directly via httpx.
-No google-cloud-aiplatform SDK needed: fast startup, lightweight container.
-Falls back to rule-based tips/insights if GEMINI_API_KEY is not set.
+EcoTrack AI Service
+-------------------
+Two call paths — whichever works first:
+
+1. Vertex AI REST API  — uses GCP service-account token from the metadata server.
+   Works automatically on Cloud Run with NO API key. Requires the service account
+   to have the "Vertex AI User" role.
+
+2. Gemini Developer REST API — used if GEMINI_API_KEY env var is set.
+   Useful for local development.
+
+Falls back to static rule-based responses if both paths fail.
 """
 import json
 import logging
 import hashlib
+import os
 import httpx
-from backend.config import (
-    VERTEX_AI_MODEL_PRIMARY,
-    VERTEX_AI_MODEL_FALLBACK,
-    GEMINI_API_KEY,
-)
+
+from backend.config import GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY
 
 logger = logging.getLogger("ecotrack")
 
-# Model name for Gemini REST API (maps to gemini-1.5-flash)
-GEMINI_REST_MODEL = "gemini-1.5-flash"
-GEMINI_REST_MODEL_FALLBACK = "gemini-1.0-pro"
-GEMINI_REST_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+# ── Model identifiers ─────────────────────────────────────────────────────────
+VERTEX_LOCATION   = "us-central1"
+VERTEX_MODEL      = "gemini-2.5-flash"
+GEMINI_API_MODEL  = "gemini-2.5-flash"
+GEMINI_API_BASE   = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# In-memory cache to avoid redundant Gemini calls
+# ── In-memory response cache ──────────────────────────────────────────────────
 _ai_cache: dict = {}
 
+# ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are EcoTrack AI, a world-class sustainability coach and climate expert, powered by Google Gemini.
 You have deep knowledge across ALL sustainability topics:
 - Carbon footprints and emissions (personal, household, national, global)
@@ -52,38 +61,97 @@ Rules:
 """
 
 
-def _get_cache_key(message: str, footprint_context: dict | None, session_id: str) -> str:
-    ctx_str = json.dumps(footprint_context, sort_keys=True) if footprint_context else ""
-    return hashlib.sha256(f"{session_id}:{message}:{ctx_str}".encode()).hexdigest()
+# ── Helper: get GCP access token from metadata server ────────────────────────
+async def _get_gcp_token() -> str:
+    """Fetch a short-lived OAuth2 token from the GCP metadata server (Cloud Run only)."""
+    url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(url, headers={"Metadata-Flavor": "Google"})
+    r.raise_for_status()
+    return r.json()["access_token"]
 
 
-async def _call_gemini_rest(
+# ── Path 1: Vertex AI REST ────────────────────────────────────────────────────
+async def _call_vertex_ai(
     prompt: str,
-    system_instruction: str | None = None,
-    response_mime_type: str | None = None,
     temperature: float = 0.7,
-    max_output_tokens: int = 300,
-    model: str = GEMINI_REST_MODEL,
+    max_output_tokens: int = 500,
+    response_mime_type: str | None = None,
 ) -> str:
-    """Call Gemini Developer REST API. Raises on failure."""
+    """Call Vertex AI generateContent endpoint using the Cloud Run service-account token."""
+    project = GOOGLE_CLOUD_PROJECT
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT not set")
+
+    token = await _get_gcp_token()
+    url = (
+        f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/"
+        f"projects/{project}/locations/{VERTEX_LOCATION}/"
+        f"publishers/google/models/{VERTEX_MODEL}:generateContent"
+    )
+
+    payload: dict = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            }
+        },
+    }
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Vertex AI {resp.status_code}: {resp.text[:300]}")
+
+    data = resp.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise ValueError("Vertex AI returned no candidates")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    if not parts:
+        raise ValueError("Vertex AI candidate had no parts")
+    return parts[0].get("text", "").strip()
+
+
+# ── Path 2: Gemini Developer API ──────────────────────────────────────────────
+async def _call_gemini_api(
+    prompt: str,
+    temperature: float = 0.7,
+    max_output_tokens: int = 500,
+    response_mime_type: str | None = None,
+) -> str:
+    """Call Google AI Studio Gemini REST API using an API key."""
     if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY not configured")
+        raise RuntimeError("GEMINI_API_KEY not set")
 
-    url = f"{GEMINI_REST_BASE}/{model}:generateContent?key={GEMINI_API_KEY}"
-
+    url = f"{GEMINI_API_BASE}/{GEMINI_API_MODEL}:generateContent?key={GEMINI_API_KEY}"
     payload: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            }
         },
     }
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     if response_mime_type:
         payload["generationConfig"]["responseMimeType"] = response_mime_type
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
 
     if resp.status_code != 200:
@@ -92,15 +160,47 @@ async def _call_gemini_rest(
     data = resp.json()
     candidates = data.get("candidates", [])
     if not candidates:
-        finish = data.get("promptFeedback", {}).get("blockReason", "unknown")
-        raise ValueError(f"Gemini returned no candidates (blockReason={finish})")
-
+        raise ValueError("Gemini API returned no candidates")
     parts = candidates[0].get("content", {}).get("parts", [])
     if not parts:
-        raise ValueError("Gemini candidate had no parts")
-
+        raise ValueError("Gemini API candidate had no parts")
     return parts[0].get("text", "").strip()
 
+
+# ── Unified caller: try Vertex AI first, fall back to Gemini API key ──────────
+async def _call_ai(
+    prompt: str,
+    temperature: float = 0.7,
+    max_output_tokens: int = 500,
+    response_mime_type: str | None = None,
+) -> tuple[str, str]:
+    """Returns (text, model_used). Tries Vertex AI then Gemini API key."""
+    # Try Vertex AI (works automatically on Cloud Run via service account)
+    try:
+        text = await _call_vertex_ai(prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info("AI response via Vertex AI REST")
+        return text, VERTEX_MODEL
+    except Exception as e:
+        logger.warning(f"Vertex AI failed: {e}")
+
+    # Try Gemini Developer API key
+    try:
+        text = await _call_gemini_api(prompt, temperature, max_output_tokens, response_mime_type)
+        logger.info("AI response via Gemini Developer API")
+        return text, GEMINI_API_MODEL
+    except Exception as e:
+        logger.warning(f"Gemini API key failed: {e}")
+
+    raise RuntimeError("All AI providers failed")
+
+
+# ── Cache key ─────────────────────────────────────────────────────────────────
+def _get_cache_key(message: str, footprint_context: dict | None, session_id: str) -> str:
+    ctx_str = json.dumps(footprint_context, sort_keys=True) if footprint_context else ""
+    return hashlib.sha256(f"{session_id}:{message}:{ctx_str}".encode()).hexdigest()
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 async def get_ai_response(
     message: str, footprint_context: dict | None, session_id: str
@@ -113,30 +213,31 @@ async def get_ai_response(
 
     system = SYSTEM_PROMPT
     if footprint_context:
-        system += f"\n\nUser's footprint data:\n{json.dumps(footprint_context, indent=2)}"
-    prompt = f"{system}\n\nUser message: {message}"
+        system += f"\n\nUser's current carbon footprint data:\n{json.dumps(footprint_context, indent=2)}"
 
-    for model in [GEMINI_REST_MODEL, GEMINI_REST_MODEL_FALLBACK]:
-        try:
-            reply = await _call_gemini_rest(prompt, temperature=0.7, max_output_tokens=300, model=model)
-            logger.info(f"Chat via Gemini REST ({model}) for session {session_id}")
-            _ai_cache[cache_key] = (reply, model)
-            return reply, model
-        except Exception as e:
-            logger.warning(f"Gemini REST ({model}) failed: {e}")
+    prompt = f"{system}\n\nUser: {message}\n\nEcoTrack AI:"
 
-    static = (
-        "I'm here to support your sustainability journey! "
-        "Try switching off standby appliances as a quick win today. "
-        "Ask me about transport, diet, or energy to get personalised tips!"
-    )
-    return static, "static-fallback"
+    try:
+        reply, model_used = await _call_ai(prompt, temperature=0.7, max_output_tokens=400)
+        _ai_cache[cache_key] = (reply, model_used)
+        return reply, model_used
+    except Exception as e:
+        logger.error(f"All AI providers failed for chat: {e}")
+        static = (
+            "I'm here to support your sustainability journey! "
+            "Try switching off standby appliances as a quick win today. "
+            "Ask me about transport, diet, or energy to get personalised tips!"
+        )
+        return static, "static-fallback"
 
 
 async def get_ai_tips(input_data: dict, breakdown: dict) -> list[dict]:
-    """Generate 5 personalised reduction tips. Raises on failure (caller catches → fallback)."""
+    """Generate 5 personalised reduction tips."""
     total = sum(breakdown.get(c, 0.0) for c in ["transport", "diet", "energy", "shopping"])
-    prompt = f"""You are a carbon footprint expert.
+    prompt = f"""{SYSTEM_PROMPT}
+
+Generate exactly 5 personalised carbon reduction tips for this user.
+
 User inputs:
 - Transport: {input_data.get('transport_mode')} at {input_data.get('transport_km_per_week')} km/week
 - Diet: {input_data.get('diet_type')}
@@ -150,17 +251,19 @@ Monthly emissions (kg CO2e):
 - Shopping: {breakdown.get('shopping', 0)} kg
 - Total: {total:.1f} kg
 
-Return exactly 5 personalised, concrete tips as a JSON array. Each object must have:
+Return ONLY a JSON array of exactly 5 objects. Each object must have:
 "action" (string), "saving_kg" (positive float), "difficulty" ("Easy"/"Medium"/"Hard"), "category" ("transport"/"diet"/"energy"/"shopping").
-Return ONLY the JSON array, no markdown fences."""
+No markdown, no explanation, just the JSON array."""
 
-    text = await _call_gemini_rest(
-        prompt,
-        response_mime_type="application/json",
-        temperature=0.2,
-        max_output_tokens=800,
-    )
-    logger.info("Gemini REST returned tips")
+    text, _ = await _call_ai(prompt, temperature=0.2, max_output_tokens=800, response_mime_type="application/json")
+
+    # Strip markdown fences if present
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
 
     parsed = json.loads(text)
     if not isinstance(parsed, list):
@@ -182,32 +285,40 @@ Return ONLY the JSON array, no markdown fences."""
         if category not in ("transport", "diet", "energy", "shopping"):
             category = "energy"
         if action and saving_kg > 0:
-            validated.append({"action": action, "saving_kg": saving_kg,
-                              "difficulty": difficulty, "category": category})
+            validated.append({
+                "action": action,
+                "saving_kg": saving_kg,
+                "difficulty": difficulty,
+                "category": category,
+            })
 
     if len(validated) < 3:
         raise ValueError(f"Only {len(validated)} valid tips returned")
 
+    logger.info(f"Generated {len(validated)} AI tips")
     return validated[:5]
 
 
 async def get_ai_insights(input_data: dict, breakdown: dict) -> str:
-    """Generate 2-3 sentence personalised dashboard insight. Raises on failure."""
+    """Generate 2-3 sentence personalised dashboard insight."""
     total = sum(breakdown.get(c, 0.0) for c in ["transport", "diet", "energy", "shopping"])
-    prompt = f"""You are a friendly carbon footprint coach.
+    prompt = f"""{SYSTEM_PROMPT}
+
+Write a 2-3 sentence personalised coaching insight for this user's carbon footprint dashboard.
+
 User inputs:
 - Transport: {input_data.get('transport_mode')} at {input_data.get('transport_km_per_week')} km/week
 - Diet: {input_data.get('diet_type')}
 - Energy: {input_data.get('energy_kwh_per_month')} kWh/month
 - Shopping: {input_data.get('shopping_level')}
 
-Monthly emissions (kg CO2e):
-- Transport: {breakdown.get('transport', 0)} | Diet: {breakdown.get('diet', 0)} | Energy: {breakdown.get('energy', 0)} | Shopping: {breakdown.get('shopping', 0)}
-- Total: {total:.1f} kg
+Monthly emissions:
+- Transport: {breakdown.get('transport', 0)} kg | Diet: {breakdown.get('diet', 0)} kg | Energy: {breakdown.get('energy', 0)} kg | Shopping: {breakdown.get('shopping', 0)} kg
+- Total: {total:.1f} kg CO2e/month
 
-Write exactly 2-3 encouraging sentences. Identify the highest emission category, give positive reinforcement, suggest one high-impact change.
-Under 80 words. No markdown, no lists."""
+Rules: Identify the highest emission category. Give positive reinforcement. Suggest one high-impact change.
+Under 80 words. Plain text only, no markdown, no bullet points."""
 
-    text = await _call_gemini_rest(prompt, temperature=0.7, max_output_tokens=150)
-    logger.info("Gemini REST returned insights")
+    text, _ = await _call_ai(prompt, temperature=0.7, max_output_tokens=150)
+    logger.info("Generated AI dashboard insight")
     return text

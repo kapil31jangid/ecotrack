@@ -41,6 +41,7 @@ export default function AiChat({ chatMessages, onSendMessage, isChatLoading, err
 
   // Helper mapping response key values to tidy badge labels
   const formatModelBadge = (modelStr) => {
+    if (modelStr === "gemini-2.5-flash") return "✦ Gemini 2.5 Flash";
     if (modelStr === "gemini-1.5-flash") return "✦ Gemini 1.5 Flash";
     if (modelStr === "gemini-1.0-pro") return "✦ Gemini 1.0 Pro";
     return modelStr ? `✦ ${modelStr}` : "✦ Gemini AI";
