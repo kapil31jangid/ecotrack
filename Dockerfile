@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /var/log/supervisor /tmp/nginx
 
 COPY --from=python-builder /install /usr/local
-WORKDIR /app/backend
-COPY backend/ ./
+WORKDIR /app
+COPY backend/ ./backend/
 COPY --from=node-builder /app/frontend/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
