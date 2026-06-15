@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-local-dev}
+      FIRESTORE_COLLECTION: ${FIRESTORE_COLLECTION:-footprints}
+    restart: unless-stopped
