@@ -77,7 +77,14 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
         <p className="text-white/80 text-sm mt-1">Estimate your footprint in 3 simple steps</p>
         
         {/* Progress Bar */}
-        <div className="mt-6 flex items-center space-x-2" aria-label="Step progress">
+        <div
+          className="mt-6 flex items-center space-x-2"
+          role="progressbar"
+          aria-valuenow={activeStep}
+          aria-valuemin="1"
+          aria-valuemax="3"
+          aria-valuetext={`Step ${activeStep} of 3`}
+        >
           {[1, 2, 3].map((step) => (
             <React.Fragment key={step}>
               <div
@@ -117,7 +124,7 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
             <h3 className="text-lg font-bold text-primary-dark">Step 1: Transport & Mobility</h3>
             
             {/* Mode Selectors */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-3 gap-4" role="radiogroup" aria-label="Transport Mode">
               {[
                 { id: "car", label: "Car 🚗", icon: Car },
                 { id: "bus", label: "Bus/Metro 🚌", icon: Bus },
@@ -129,6 +136,8 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
                   <button
                     key={mode.id}
                     type="button"
+                    role="radio"
+                    aria-checked={isSelected}
                     onClick={() => updateField("transport_mode", mode.id)}
                     className={`flex flex-col items-center justify-center p-5 rounded-2xl border transition-all duration-200 ${
                       isSelected
@@ -153,6 +162,9 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
                   Weekly travel distance
                 </label>
                 <div className="flex items-center space-x-1">
+                  <label htmlFor="transport_km_number" className="sr-only">
+                    Weekly travel distance (number)
+                  </label>
                   <input
                     id="transport_km_number"
                     type="number"
@@ -200,8 +212,8 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
 
             {/* Diet Cards */}
             <div className="space-y-2">
-              <span className="block text-sm font-semibold text-gray-700 mb-2">Diet type</span>
-              <div className="grid grid-cols-2 gap-3">
+              <span className="block text-sm font-semibold text-gray-700 mb-2" id="diet-label">Diet type</span>
+              <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-labelledby="diet-label">
                 {[
                   { id: "vegan", label: "Vegan 🥦", desc: "No animal products" },
                   { id: "vegetarian", label: "Vegetarian 🥗", desc: "No meat/fish" },
@@ -213,6 +225,8 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
                     <button
                       key={diet.id}
                       type="button"
+                      role="radio"
+                      aria-checked={isSelected}
                       onClick={() => updateField("diet_type", diet.id)}
                       className={`flex flex-col items-start p-4 rounded-xl border text-left transition-all duration-200 ${
                         isSelected
@@ -269,10 +283,10 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
 
             {/* Shopping Habits */}
             <div className="space-y-2">
-              <span className="block text-sm font-semibold text-gray-700 mb-2">
+              <span className="block text-sm font-semibold text-gray-700 mb-2" id="shopping-label">
                 Shopping & consumption levels
               </span>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-labelledby="shopping-label">
                 {[
                   { id: "low", label: "Low", desc: "Minimalist buying" },
                   { id: "medium", label: "Medium", desc: "Average buyer" },
@@ -283,6 +297,8 @@ export default function Calculator({ onCalculate, isCalculating, error, clearErr
                     <button
                       key={level.id}
                       type="button"
+                      role="radio"
+                      aria-checked={isSelected}
                       onClick={() => updateField("shopping_level", level.id)}
                       className={`flex flex-col items-center p-3 rounded-xl border text-center transition-all duration-200 ${
                         isSelected

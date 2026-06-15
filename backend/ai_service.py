@@ -1,5 +1,6 @@
 import json
 import logging
+import hashlib
 import vertexai
 from vertexai.generative_models import (
     GenerativeModel,
@@ -16,6 +17,15 @@ from backend.config import (
 )
 
 logger = logging.getLogger("ecotrack")
+
+# Simple in-memory cache for duplicate Vertex AI queries within same context and session
+_ai_cache = {}
+
+def _get_cache_key(message: str, footprint_context: dict | None, session_id: str) -> str:
+    """Generate SHA256 cache key from session_id, message and sorted footprint context."""
+    ctx_str = json.dumps(footprint_context, sort_keys=True) if footprint_context else ""
+    raw_key = f"{session_id}:{message}:{ctx_str}"
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 SYSTEM_PROMPT = """You are EcoTrack AI, a friendly and encouraging sustainability coach built on Google Gemini.
 You receive the user's carbon footprint data as context in every conversation.
@@ -97,6 +107,12 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
     
     Log which model responded via Cloud Logging.
     """
+    # 0. Check cache first for efficiency
+    cache_key = _get_cache_key(message, footprint_context, session_id)
+    if cache_key in _ai_cache:
+        logger.info(f"AI response cache hit for session: {session_id}")
+        return _ai_cache[cache_key]
+
     system_part = SYSTEM_PROMPT
     if footprint_context:
         system_part += f"\n\nUser's current carbon footprint data:\n{json.dumps(footprint_context, indent=2)}"
@@ -106,6 +122,7 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
     try:
         reply = await _call_gemini(VERTEX_AI_MODEL_PRIMARY, full_prompt)
         logger.info(f"Successfully generated response using model '{VERTEX_AI_MODEL_PRIMARY}' for session: {session_id}")
+        _ai_cache[cache_key] = (reply, VERTEX_AI_MODEL_PRIMARY)
         return reply, VERTEX_AI_MODEL_PRIMARY
     except Exception as e:
         logger.warning(f"Failed to generate response with primary model '{VERTEX_AI_MODEL_PRIMARY}' for session {session_id}: {str(e)}")
@@ -114,6 +131,7 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
         try:
             reply = await _call_gemini(VERTEX_AI_MODEL_FALLBACK, full_prompt)
             logger.info(f"Successfully generated response using fallback model '{VERTEX_AI_MODEL_FALLBACK}' for session: {session_id}")
+            _ai_cache[cache_key] = (reply, VERTEX_AI_MODEL_FALLBACK)
             return reply, VERTEX_AI_MODEL_FALLBACK
         except Exception as fallback_err:
             logger.error(

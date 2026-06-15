@@ -17,6 +17,7 @@ if parent_dir not in sys.path:
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 
@@ -80,6 +81,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # 1. X-Request-ID and Request Timing Logger Middleware
 @app.middleware("http")
 async def add_request_id_and_log(request: Request, call_next):
@@ -138,7 +141,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Endpoints
 @app.get("/api/health", response_model=HealthResponse)
-def get_health():
+def get_health() -> HealthResponse:
     """Endpoint indicating API health state."""
     return HealthResponse(
         status="ok",
@@ -147,7 +150,7 @@ def get_health():
     )
 
 @app.post("/api/calculate", response_model=FootprintResult)
-async def calculate_footprint_endpoint(input_data: FootprintInput):
+async def calculate_footprint_endpoint(input_data: FootprintInput) -> FootprintResult:
     """
     Validate FootprintInput, calculate emissions, 
     and save log to Firestore asynchronously.
@@ -170,7 +173,7 @@ async def calculate_footprint_endpoint(input_data: FootprintInput):
 
 @app.post("/api/chat", response_model=ChatResponse)
 @limiter.limit("10/minute")
-async def chat_endpoint(request: Request, chat_req: ChatRequest):
+async def chat_endpoint(request: Request, chat_req: ChatRequest) -> ChatResponse:
     """
     Send a message to Vertex AI Gemini incorporating carbon footprint context.
     Rate-limited to 10 requests per minute per IP.
@@ -202,7 +205,7 @@ async def chat_endpoint(request: Request, chat_req: ChatRequest):
     )
 
 @app.get("/api/history/{session_id}", response_model=list[FootprintResult])
-async def history_endpoint(session_id: str):
+async def history_endpoint(session_id: str) -> list[FootprintResult]:
     """Retrieve all calculations logged for a given session."""
     history = await get_footprint_history(session_id)
     # Map raw Firestore documents to FootprintResult model structure
@@ -216,7 +219,7 @@ async def history_endpoint(session_id: str):
     return results
 
 @app.post("/api/admin/aggregate-stats")
-async def aggregate_stats_endpoint(x_scheduler_job: str = Header(None, alias="X-CloudScheduler-JobName")):
+async def aggregate_stats_endpoint(x_scheduler_job: str | None = Header(None, alias="X-CloudScheduler-JobName")) -> dict:
     """
     Run admin aggregation cron to compile analytics summary.
     Header validation checks for 'X-CloudScheduler-JobName'.

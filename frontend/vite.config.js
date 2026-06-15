@@ -8,6 +8,23 @@ export default defineConfig({
       "/api": "http://localhost:8000",
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("recharts") || id.includes("d3")) {
+              return "recharts";
+            }
+            if (id.includes("lucide-react")) {
+              return "lucide";
+            }
+            return "vendor";
+          }
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

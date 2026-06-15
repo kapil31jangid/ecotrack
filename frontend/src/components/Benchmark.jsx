@@ -66,7 +66,7 @@ export default function Benchmark({ result }) {
       </div>
 
       {/* Recharts comparison bar graph */}
-      <div className="w-full h-[280px]">
+      <div className="w-full h-[280px]" role="region" aria-label="Carbon footprint comparisons against India and global averages">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
             <XAxis dataKey="name" stroke="#052e16" fontSize={11} tickLine={false} />

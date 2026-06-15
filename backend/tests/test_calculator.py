@@ -91,3 +91,59 @@ def test_invalid_diet_raises():
     """Verify calculations with unsupported parameters raise error."""
     with pytest.raises(KeyError):
         calculate_diet_emissions("junkfood_only")
+
+def test_pydantic_invalid_transport_km_negative():
+    """Verify FootprintInput rejects negative transport distance."""
+    from pydantic import ValidationError
+    from backend.models import FootprintInput
+    with pytest.raises(ValidationError):
+        FootprintInput(
+            session_id="test",
+            transport_mode="car",
+            transport_km_per_week=-1.0,
+            diet_type="vegan",
+            energy_kwh_per_month=100.0,
+            shopping_level="low"
+        )
+
+def test_pydantic_invalid_transport_km_exceeded():
+    """Verify FootprintInput rejects transport distance exceeding limit."""
+    from pydantic import ValidationError
+    from backend.models import FootprintInput
+    with pytest.raises(ValidationError):
+        FootprintInput(
+            session_id="test",
+            transport_mode="car",
+            transport_km_per_week=6000.0,
+            diet_type="vegan",
+            energy_kwh_per_month=100.0,
+            shopping_level="low"
+        )
+
+def test_pydantic_invalid_energy_kwh_negative():
+    """Verify FootprintInput rejects negative energy usage."""
+    from pydantic import ValidationError
+    from backend.models import FootprintInput
+    with pytest.raises(ValidationError):
+        FootprintInput(
+            session_id="test",
+            transport_mode="car",
+            transport_km_per_week=100.0,
+            diet_type="vegan",
+            energy_kwh_per_month=-1.0,
+            shopping_level="low"
+        )
+
+def test_pydantic_invalid_diet_type():
+    """Verify FootprintInput rejects invalid diet type literals."""
+    from pydantic import ValidationError
+    from backend.models import FootprintInput
+    with pytest.raises(ValidationError):
+        FootprintInput(
+            session_id="test",
+            transport_mode="car",
+            transport_km_per_week=100.0,
+            diet_type="keto",
+            energy_kwh_per_month=100.0,
+            shopping_level="low"
+        )

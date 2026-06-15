@@ -213,7 +213,7 @@ export default function Dashboard({ result, doneTips, onMarkTipDone }) {
             </button>
           </div>
 
-          <div className="flex-grow w-full min-h-[180px]">
+          <div className="flex-grow w-full min-h-[180px]" role="region" aria-label="Monthly carbon footprint breakdown by category">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={chartData}

@@ -121,7 +121,7 @@ export default function ProgressTracker({ history, onNavigateToCalculate }) {
       )}
 
       {/* Recharts line graph */}
-      <div className="w-full h-[260px] pr-2">
+      <div className="w-full h-[260px] pr-2" role="region" aria-label="Line chart showing carbon footprint progress over time">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
             <XAxis dataKey="date" stroke="#052e16" fontSize={11} tickLine={false} />

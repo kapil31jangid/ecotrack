@@ -1,3 +1,4 @@
+from functools import lru_cache
 from backend.config import (
     TRANSPORT_FACTORS,
     DIET_FACTORS,
@@ -8,22 +9,26 @@ from backend.config import (
     INDIA_AVERAGE_MONTHLY,
 )
 
+@lru_cache(maxsize=64)
 def calculate_transport_emissions(mode: str, km_per_week: float) -> float:
     """Calculate monthly transport CO2e. Formula: km_per_week * WEEKS_PER_MONTH * TRANSPORT_FACTORS[mode]"""
     if mode not in TRANSPORT_FACTORS:
         raise KeyError(f"Invalid transport mode: {mode}")
     return float(km_per_week * WEEKS_PER_MONTH * TRANSPORT_FACTORS[mode])
 
+@lru_cache(maxsize=64)
 def calculate_diet_emissions(diet_type: str) -> float:
     """Return monthly diet CO2e from DIET_FACTORS."""
     if diet_type not in DIET_FACTORS:
         raise KeyError(f"Invalid diet type: {diet_type}")
     return float(DIET_FACTORS[diet_type])
 
+@lru_cache(maxsize=64)
 def calculate_energy_emissions(kwh_per_month: float) -> float:
     """Calculate monthly energy CO2e: kwh * ENERGY_FACTOR."""
     return float(kwh_per_month * ENERGY_FACTOR)
 
+@lru_cache(maxsize=64)
 def calculate_shopping_emissions(level: str) -> float:
     """Return monthly shopping CO2e from SHOPPING_FACTORS."""
     if level not in SHOPPING_FACTORS:

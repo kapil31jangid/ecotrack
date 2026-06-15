@@ -51,7 +51,7 @@ async def get_footprint_history(session_id: str) -> list[dict]:
     """Get all records for session ordered by timestamp asc. Return [] if none."""
     if db:
         try:
-            query = db.collection(FIRESTORE_COLLECTION).where("session_id", "==", session_id)
+            query = db.collection(FIRESTORE_COLLECTION).where("session_id", "==", session_id).limit(100)
             docs = []
             async for doc in query.stream():
                 data = doc.to_dict()
@@ -74,7 +74,7 @@ async def get_footprint_history(session_id: str) -> list[dict]:
     else:
         records = _local_footprints.get(session_id, [])
         logger.info(f"Retrieved {len(records)} footprint logs from local store for session: {session_id}")
-        return sorted(records, key=lambda x: x.get("timestamp", ""))
+        return sorted(records, key=lambda x: x.get("timestamp", ""))[-100:]
 
 async def save_chat_message(session_id: str, role: str, content: str, model_used: str = "") -> None:
     """Save chat message to footprints/{session_id}/chat subcollection."""
@@ -154,13 +154,14 @@ async def aggregate_weekly_stats() -> dict:
 
     if db:
         try:
-            stats["timestamp"] = SERVER_TIMESTAMP
-            await db.collection("analytics").document("weekly_summary").set(stats)
-            # Fetch for output serialization compatibility
+            write_stats = stats.copy()
+            write_stats["timestamp"] = SERVER_TIMESTAMP
+            await db.collection("analytics").document("weekly_summary").set(write_stats)
             stats["timestamp"] = datetime.utcnow().isoformat()
             logger.info("Successfully saved aggregated weekly summary to Firestore.")
         except Exception as e:
             logger.error(f"Error writing analytics weekly summary: {str(e)}")
+            stats["timestamp"] = datetime.utcnow().isoformat()
     else:
         stats["timestamp"] = datetime.utcnow().isoformat()
         _local_analytics["weekly_summary"] = stats
