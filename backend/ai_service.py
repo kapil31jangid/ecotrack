@@ -229,3 +229,45 @@ Return ONLY a JSON array of objects. Do not include markdown formatting or wrapp
         
     return validated_tips[:5]
 
+
+async def get_ai_insights(input_data: dict, breakdown: dict) -> str:
+    """
+    Generate a 2-3 sentence personalized carbon footprint insight using Vertex AI Gemini.
+    """
+    _initialize_vertex()
+    
+    prompt = f"""You are a friendly and encouraging carbon footprint expert.
+Based on the user's consumption inputs:
+- Transport mode: {input_data.get('transport_mode')} ({input_data.get('transport_km_per_week')} km/week)
+- Diet type: {input_data.get('diet_type')}
+- Electricity: {input_data.get('energy_kwh_per_month')} kWh/month
+- Shopping level: {input_data.get('shopping_level')}
+
+And their monthly emissions breakdown (in kg CO2e):
+- Transport: {breakdown.get('transport', 0.0)} kg
+- Diet: {breakdown.get('diet', 0.0)} kg
+- Energy: {breakdown.get('energy', 0.0)} kg
+- Shopping: {breakdown.get('shopping', 0.0)} kg
+- Total monthly footprint: {breakdown.get('transport', 0.0) + breakdown.get('diet', 0.0) + breakdown.get('energy', 0.0) + breakdown.get('shopping', 0.0)} kg
+
+Write exactly 2-3 sentences of personalized, constructive insights.
+Identify their highest emission category, highlight how they are doing (using positive reinforcement if possible), and suggest one high-impact change they can make to improve.
+Keep it encouraging, specific, and under 80 words. Do not use any markdown formatting or lists.
+"""
+    
+    generation_config = GenerationConfig(
+        temperature=0.7,
+        max_output_tokens=150,
+    )
+    
+    model = GenerativeModel(
+        VERTEX_AI_MODEL_PRIMARY,
+        generation_config=generation_config,
+        safety_settings=SAFETY_SETTINGS,
+    )
+    
+    logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized dashboard insights...")
+    response = await model.generate_content_async(prompt)
+    return response.text.strip()
+
+

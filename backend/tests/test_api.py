@@ -39,8 +39,10 @@ def test_calculate_endpoint():
         {"action": "Buy items in bulk", "saving_kg": 5.0, "difficulty": "Easy", "category": "shopping"},
         {"action": "Turn off AC when leaving", "saving_kg": 20.0, "difficulty": "Easy", "category": "energy"},
     ]
-    with patch("backend.main.get_ai_tips", new_callable=AsyncMock) as mocked_tips_service:
+    with patch("backend.main.get_ai_tips", new_callable=AsyncMock) as mocked_tips_service, \
+         patch("backend.main.get_ai_insights", new_callable=AsyncMock) as mocked_insights_service:
         mocked_tips_service.return_value = mock_tips
+        mocked_insights_service.return_value = "Mock carbon footprint insights from Gemini."
         response = client.post("/api/calculate", json=payload)
         assert response.status_code == 200
         data = response.json()
@@ -49,6 +51,7 @@ def test_calculate_endpoint():
         assert data["session_id"] == "test-session-123"
         assert len(data["tips"]) == 5
         assert data["tips"][0]["action"] == "Use a bicycle"
+        assert data["insights"] == "Mock carbon footprint insights from Gemini."
 
 def test_calculate_endpoint_fallback():
     payload = {
@@ -59,7 +62,8 @@ def test_calculate_endpoint_fallback():
         "energy_kwh_per_month": 120.0,
         "shopping_level": "low"
     }
-    with patch("backend.main.get_ai_tips", side_effect=Exception("Vertex AI Error")):
+    with patch("backend.main.get_ai_tips", side_effect=Exception("Vertex AI Error")), \
+         patch("backend.main.get_ai_insights", side_effect=Exception("Vertex AI Error")):
         response = client.post("/api/calculate", json=payload)
         assert response.status_code == 200
         data = response.json()
@@ -67,6 +71,8 @@ def test_calculate_endpoint_fallback():
         assert len(data["tips"]) == 5
         # Verification that fallback is rule-based tips
         assert any(t["action"] == "Switch to public transport" for t in data["tips"])
+        assert "insights" in data
+        assert "Based on your breakdown" in data["insights"]
 
 def test_history_endpoint():
     response = client.get("/api/history/test-session-123")

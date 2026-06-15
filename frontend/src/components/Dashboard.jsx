@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Copy, CheckSquare, Award, ArrowUpRight, CheckCircle2 } from "lucide-react";
+import { Copy, CheckSquare, Award, ArrowUpRight, CheckCircle2, Sparkles } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -25,6 +25,7 @@ export default function Dashboard({ result, doneTips, onMarkTipDone }) {
     tips,
     vs_global,
     vs_india,
+    insights,
   } = result;
 
   const labelData = getFootprintLabel(co2e_monthly);
@@ -93,6 +94,20 @@ export default function Dashboard({ result, doneTips, onMarkTipDone }) {
 
   return (
     <div className="space-y-8 animate-fade-in relative">
+      {/* AI Coach Insights Card */}
+      {insights && (
+        <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-6 rounded-3xl border border-green-500/20 shadow-lg glow-card flex items-start space-x-4 animate-fade-in">
+          <div className="bg-green-600 text-white p-3 rounded-2xl shadow-md flex-shrink-0 animate-pulse">
+            <Sparkles className="h-6 w-6" />
+          </div>
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-wider text-green-800 flex items-center space-x-1.5">
+              <span>AI Coach Insights</span>
+            </h4>
+            <p className="text-sm text-gray-700 font-medium leading-relaxed mt-1">{insights}</p>
+          </div>
+        </div>
+      )}
       {/* Visual Lightweight Confetti Effect */}
       {confettiActive && (
         <div

@@ -82,7 +82,8 @@ export function useFootprint() {
             vs_global: h.vs_global,
             vs_india: h.vs_india,
             timestamp: h.timestamp,
-            session_id: h.session_id
+            session_id: h.session_id,
+            insights: h.insights || ""
           }));
           setHistory(normalized);
         }

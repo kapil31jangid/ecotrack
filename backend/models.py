@@ -34,6 +34,7 @@ class FootprintResult(BaseModel):
     vs_global: str
     vs_india: str
     timestamp: str
+    insights: Optional[str] = None
 
 class ChatRequest(BaseModel):
     """User prompt context payload for Gemini AI chat sessions."""

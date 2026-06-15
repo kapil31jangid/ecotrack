@@ -36,7 +36,7 @@ from backend.models import (
     Tip,
 )
 from backend.calculator import calculate_total_footprint
-from backend.ai_service import get_ai_response, get_ai_tips
+from backend.ai_service import get_ai_response, get_ai_tips, get_ai_insights
 from backend.firestore_service import (
     save_footprint,
     get_footprint_history,
@@ -169,6 +169,23 @@ async def calculate_footprint_endpoint(input_data: FootprintInput) -> FootprintR
             logging.getLogger("ecotrack").warning(
                 f"Failed to generate Gemini AI tips for session {input_data.session_id}: {str(e)}. "
                 f"Falling back to local rule-based tips."
+            )
+        
+        # Generate dashboard insights with Gemini AI if possible
+        try:
+            ai_insights = await get_ai_insights(input_data.model_dump(), result_dict["category_breakdown"])
+            result_dict["insights"] = ai_insights
+            logging.getLogger("ecotrack").info(f"Successfully generated Gemini AI insights for session: {input_data.session_id}")
+        except Exception as e:
+            logging.getLogger("ecotrack").warning(
+                f"Failed to generate Gemini AI insights for session {input_data.session_id}: {str(e)}. "
+                f"Falling back to default insights."
+            )
+            # Default deterministic fallback insight
+            highest_category = max(result_dict["category_breakdown"], key=result_dict["category_breakdown"].get)
+            result_dict["insights"] = (
+                f"Based on your breakdown, your highest monthly emissions come from the {highest_category} category. "
+                "Focus on the customized action steps below to start making a positive impact today."
             )
         
         # Add session and timestamp to response
