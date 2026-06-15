@@ -1,14 +1,6 @@
 import json
 import logging
 import hashlib
-import vertexai
-from vertexai.generative_models import (
-    GenerativeModel,
-    GenerationConfig,
-    SafetySetting,
-    HarmCategory,
-    HarmBlockThreshold,
-)
 from backend.config import (
     GOOGLE_CLOUD_PROJECT,
     VERTEX_AI_LOCATION,
@@ -38,54 +30,76 @@ Rules:
 - Use simple language, avoid jargon
 """
 
-GENERATION_CONFIG = GenerationConfig(
-    temperature=0.7,
-    top_p=0.95,
-    max_output_tokens=300,
-)
+# Lazy-initialized Vertex AI packages and clients
+_GenerativeModel = None
+_GenerationConfig = None
+_SafetySetting = None
+_HarmCategory = None
+_HarmBlockThreshold = None
 
-SAFETY_SETTINGS = [
-    SafetySetting(
-        category=HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    ),
-    SafetySetting(
-        category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    ),
-    SafetySetting(
-        category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    ),
-    SafetySetting(
-        category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    ),
-]
+def _lazy_import_vertex():
+    global _GenerativeModel, _GenerationConfig, _SafetySetting, _HarmCategory, _HarmBlockThreshold
+    if _GenerativeModel is None:
+        import vertexai
+        from vertexai.generative_models import (
+            GenerativeModel,
+            GenerationConfig,
+            SafetySetting,
+            HarmCategory,
+            HarmBlockThreshold,
+        )
+        _GenerativeModel = GenerativeModel
+        _GenerationConfig = GenerationConfig
+        _SafetySetting = SafetySetting
+        _HarmCategory = HarmCategory
+        _HarmBlockThreshold = HarmBlockThreshold
 
-_vertex_initialized = False
-
-def _initialize_vertex():
-    """Initialize Vertex AI with project and location from config."""
-    global _vertex_initialized
-    if not _vertex_initialized:
-        # Avoid crash if project is empty during local testing without GCP configs
+        # Initialize Vertex AI
         project = GOOGLE_CLOUD_PROJECT if GOOGLE_CLOUD_PROJECT else None
         vertexai.init(
             project=project,
             location=VERTEX_AI_LOCATION
         )
-        _vertex_initialized = True
         logger.info(f"Initialized Vertex AI with project: '{project}', location: '{VERTEX_AI_LOCATION}'")
+
+def get_generation_config(temperature=0.7, top_p=0.95, max_output_tokens=300, response_mime_type=None):
+    _lazy_import_vertex()
+    return _GenerationConfig(
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_output_tokens,
+        response_mime_type=response_mime_type,
+    )
+
+def get_safety_settings():
+    _lazy_import_vertex()
+    return [
+        _SafetySetting(
+            category=_HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold=_HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        ),
+        _SafetySetting(
+            category=_HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold=_HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        ),
+        _SafetySetting(
+            category=_HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold=_HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        ),
+        _SafetySetting(
+            category=_HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold=_HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        ),
+    ]
 
 async def _call_gemini(model_name: str, prompt: str) -> str:
     """Call a specific Gemini model and return text response."""
-    _initialize_vertex()
-    model = GenerativeModel(
+    _lazy_import_vertex()
+    model = _GenerativeModel(
         model_name,
         system_instruction=SYSTEM_PROMPT,
-        generation_config=GENERATION_CONFIG,
-        safety_settings=SAFETY_SETTINGS,
+        generation_config=get_generation_config(),
+        safety_settings=get_safety_settings(),
     )
     # Using async call for FastAPI compatibility
     response = await model.generate_content_async(prompt)
@@ -98,12 +112,6 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
     2. On failure, fallback to gemini-1.0-pro
     3. On both failing, return friendly static message
     Returns: (reply_text, model_used_string)
-    
-    Build the prompt as:
-    system_part = SYSTEM_PROMPT
-    if footprint_context:
-        system_part += f"\n\nUser's current carbon footprint data:\n{json.dumps(footprint_context, indent=2)}"
-    full_prompt = f"{system_part}\n\nUser message: {message}"
     
     Log which model responded via Cloud Logging.
     """
@@ -145,13 +153,12 @@ async def get_ai_response(message: str, footprint_context: dict | None, session_
             )
             return static_reply, "static-fallback"
 
-
 async def get_ai_tips(input_data: dict, breakdown: dict) -> list[dict]:
     """
     Generate 5 personalized carbon reduction tips using Vertex AI Gemini.
     Returns a list of dictionaries matching the Tip structure.
     """
-    _initialize_vertex()
+    _lazy_import_vertex()
     
     prompt = f"""You are a carbon footprint expert.
 Based on the user's consumption inputs:
@@ -177,17 +184,10 @@ Your response must be a valid JSON array of objects, where each object has exact
 Return ONLY a JSON array of objects. Do not include markdown formatting or wrapper (like ```json).
 """
     
-    # Configure Gemini to return JSON
-    generation_config = GenerationConfig(
-        temperature=0.2,
-        max_output_tokens=800,
-        response_mime_type="application/json"
-    )
-    
-    model = GenerativeModel(
+    model = _GenerativeModel(
         VERTEX_AI_MODEL_PRIMARY,
-        generation_config=generation_config,
-        safety_settings=SAFETY_SETTINGS,
+        generation_config=get_generation_config(temperature=0.2, max_output_tokens=800, response_mime_type="application/json"),
+        safety_settings=get_safety_settings(),
     )
     
     logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized tips...")
@@ -229,12 +229,11 @@ Return ONLY a JSON array of objects. Do not include markdown formatting or wrapp
         
     return validated_tips[:5]
 
-
 async def get_ai_insights(input_data: dict, breakdown: dict) -> str:
     """
     Generate a 2-3 sentence personalized carbon footprint insight using Vertex AI Gemini.
     """
-    _initialize_vertex()
+    _lazy_import_vertex()
     
     prompt = f"""You are a friendly and encouraging carbon footprint expert.
 Based on the user's consumption inputs:
@@ -255,19 +254,12 @@ Identify their highest emission category, highlight how they are doing (using po
 Keep it encouraging, specific, and under 80 words. Do not use any markdown formatting or lists.
 """
     
-    generation_config = GenerationConfig(
-        temperature=0.7,
-        max_output_tokens=150,
-    )
-    
-    model = GenerativeModel(
+    model = _GenerativeModel(
         VERTEX_AI_MODEL_PRIMARY,
-        generation_config=generation_config,
-        safety_settings=SAFETY_SETTINGS,
+        generation_config=get_generation_config(temperature=0.7, max_output_tokens=150),
+        safety_settings=get_safety_settings(),
     )
     
     logger.info(f"Querying model '{VERTEX_AI_MODEL_PRIMARY}' for personalized dashboard insights...")
     response = await model.generate_content_async(prompt)
     return response.text.strip()
-
-
