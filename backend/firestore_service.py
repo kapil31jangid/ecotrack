@@ -1,9 +1,17 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import firestore
 from google.cloud.firestore import SERVER_TIMESTAMP
 from backend.config import GOOGLE_CLOUD_PROJECT, FIRESTORE_COLLECTION
+
+__all__ = [
+    "get_db",
+    "save_footprint",
+    "get_footprint_history",
+    "save_chat_message",
+    "aggregate_weekly_stats",
+]
 
 logger = logging.getLogger("ecotrack")
 
@@ -53,7 +61,7 @@ async def save_footprint(session_id: str, input_data: dict, result: dict) -> boo
             return False
     else:
         # Fallback to local store
-        doc_data["timestamp"] = datetime.utcnow().isoformat()
+        doc_data["timestamp"] = datetime.now(timezone.utc).isoformat()
         _local_footprints.setdefault(session_id, []).append(doc_data)
         logger.info(f"Saved footprint to in-memory store for session: {session_id}")
         return True
@@ -105,7 +113,7 @@ async def save_chat_message(session_id: str, role: str, content: str, model_used
         except Exception as e:
             logger.error(f"Error saving chat message to Firestore: {str(e)}")
     else:
-        msg_data["timestamp"] = datetime.utcnow().isoformat()
+        msg_data["timestamp"] = datetime.now(timezone.utc).isoformat()
         _local_chats.setdefault(session_id, []).append(msg_data)
         logger.info(f"Saved chat message ({role}) to local store for session: {session_id}")
 
@@ -171,13 +179,13 @@ async def aggregate_weekly_stats() -> dict:
             write_stats = stats.copy()
             write_stats["timestamp"] = SERVER_TIMESTAMP
             await db.collection("analytics").document("weekly_summary").set(write_stats)
-            stats["timestamp"] = datetime.utcnow().isoformat()
+            stats["timestamp"] = datetime.now(timezone.utc).isoformat()
             logger.info("Successfully saved aggregated weekly summary to Firestore.")
         except Exception as e:
             logger.error(f"Error writing analytics weekly summary: {str(e)}")
             stats["timestamp"] = datetime.utcnow().isoformat()
     else:
-        stats["timestamp"] = datetime.utcnow().isoformat()
+        stats["timestamp"] = datetime.now(timezone.utc).isoformat()
         _local_analytics["weekly_summary"] = stats
         logger.info("Saved weekly summary to local mock database.")
 

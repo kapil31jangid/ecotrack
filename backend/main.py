@@ -4,6 +4,7 @@ import time
 import uuid
 import asyncio
 import logging
+import traceback
 from contextlib import asynccontextmanager
 
 # Add path helper to support running from root or from within backend folder
@@ -99,15 +100,15 @@ async def add_request_id_and_log(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as exc:
-        import traceback
         duration_ms = int((time.time() - start_time) * 1000)
         tb_str = traceback.format_exc()
         logging.getLogger("ecotrack").error(
-            f"HTTP Exception: {request.method} {request.url.path} failed. Duration: {duration_ms}ms. Request ID: {request_id}\n{tb_str}"
+            f"HTTP Exception: {request.method} {request.url.path} failed. "
+            f"Duration: {duration_ms}ms. Request ID: {request_id}\n{tb_str}"
         )
         return JSONResponse(
             status_code=500,
-            content={"error": str(exc), "traceback": tb_str, "request_id": request_id}
+            content={"error": "An internal server error occurred.", "request_id": request_id},
         )
     
     duration_ms = int((time.time() - start_time) * 1000)
@@ -196,7 +197,7 @@ async def calculate_footprint_endpoint(input_data: FootprintInput) -> FootprintR
         
         # Add session and timestamp to response
         result_dict["session_id"] = input_data.session_id
-        result_dict["timestamp"] = datetime_now_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        result_dict["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         
         # Fire-and-forget save operation to Firestore
         asyncio.create_task(

@@ -1,4 +1,20 @@
+"""
+EcoTrack carbon footprint calculator.
+
+Provides pure, deterministic emission calculation functions for transport,
+diet, energy and shopping categories, plus comparison utilities and tip generation.
+"""
 from functools import lru_cache
+
+__all__ = [
+    "calculate_transport_emissions",
+    "calculate_diet_emissions",
+    "calculate_energy_emissions",
+    "calculate_shopping_emissions",
+    "compare_to_averages",
+    "generate_tips",
+    "calculate_total_footprint",
+]
 from backend.config import (
     TRANSPORT_FACTORS,
     DIET_FACTORS,

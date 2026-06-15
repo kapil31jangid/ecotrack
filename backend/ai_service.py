@@ -16,20 +16,31 @@ import json
 import logging
 import hashlib
 import os
+from functools import lru_cache
+from typing import Optional
+
 import httpx
 
 from backend.config import GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY
 
+__all__ = ["get_ai_response", "get_ai_tips", "get_ai_insights"]
+
 logger = logging.getLogger("ecotrack")
 
 # ── Model identifiers ─────────────────────────────────────────────────────────
-VERTEX_LOCATION   = "us-central1"
-VERTEX_MODEL      = "gemini-2.5-flash"
-GEMINI_API_MODEL  = "gemini-2.5-flash"
-GEMINI_API_BASE   = "https://generativelanguage.googleapis.com/v1beta/models"
+VERTEX_LOCATION  = "us-central1"
+VERTEX_MODEL     = "gemini-2.5-flash"
+GEMINI_API_MODEL = "gemini-2.5-flash"
+GEMINI_API_BASE  = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# ── In-memory response cache ──────────────────────────────────────────────────
-_ai_cache: dict = {}
+# ── Token budget constants ─────────────────────────────────────────────────────
+_CHAT_MAX_TOKENS    = 400
+_TIPS_MAX_TOKENS    = 800
+_INSIGHTS_MAX_TOKENS = 150
+
+# ── Bounded in-memory response cache (max 256 entries) ───────────────────────
+_AI_CACHE_MAX_SIZE = 256
+_ai_cache: dict[str, tuple[str, str]] = {}
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are EcoTrack AI, a world-class sustainability coach and climate expert, powered by Google Gemini.
@@ -71,12 +82,24 @@ async def _get_gcp_token() -> str:
     return r.json()["access_token"]
 
 
+# ── Shared response parser ─────────────────────────────────────────────────────
+def _parse_gemini_response(data: dict) -> str:
+    """Extract text from a Gemini/Vertex AI generateContent response dict."""
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise ValueError("AI API returned no candidates")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    if not parts:
+        raise ValueError("AI API candidate had no parts")
+    return parts[0].get("text", "").strip()
+
+
 # ── Path 1: Vertex AI REST ────────────────────────────────────────────────────
 async def _call_vertex_ai(
     prompt: str,
     temperature: float = 0.7,
-    max_output_tokens: int = 500,
-    response_mime_type: str | None = None,
+    max_output_tokens: int = _CHAT_MAX_TOKENS,
+    response_mime_type: Optional[str] = None,
 ) -> str:
     """Call Vertex AI generateContent endpoint using the Cloud Run service-account token."""
     project = GOOGLE_CLOUD_PROJECT
@@ -95,9 +118,7 @@ async def _call_vertex_ai(
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "thinkingConfig": {
-                "thinkingBudget": 0
-            }
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     if response_mime_type:
@@ -116,22 +137,15 @@ async def _call_vertex_ai(
     if resp.status_code != 200:
         raise RuntimeError(f"Vertex AI {resp.status_code}: {resp.text[:300]}")
 
-    data = resp.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise ValueError("Vertex AI returned no candidates")
-    parts = candidates[0].get("content", {}).get("parts", [])
-    if not parts:
-        raise ValueError("Vertex AI candidate had no parts")
-    return parts[0].get("text", "").strip()
+    return _parse_gemini_response(resp.json())
 
 
 # ── Path 2: Gemini Developer API ──────────────────────────────────────────────
 async def _call_gemini_api(
     prompt: str,
     temperature: float = 0.7,
-    max_output_tokens: int = 500,
-    response_mime_type: str | None = None,
+    max_output_tokens: int = _CHAT_MAX_TOKENS,
+    response_mime_type: Optional[str] = None,
 ) -> str:
     """Call Google AI Studio Gemini REST API using an API key."""
     if not GEMINI_API_KEY:
@@ -143,9 +157,7 @@ async def _call_gemini_api(
         "generationConfig": {
             "temperature": temperature,
             "maxOutputTokens": max_output_tokens,
-            "thinkingConfig": {
-                "thinkingBudget": 0
-            }
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     if response_mime_type:
@@ -157,22 +169,15 @@ async def _call_gemini_api(
     if resp.status_code != 200:
         raise RuntimeError(f"Gemini API {resp.status_code}: {resp.text[:300]}")
 
-    data = resp.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise ValueError("Gemini API returned no candidates")
-    parts = candidates[0].get("content", {}).get("parts", [])
-    if not parts:
-        raise ValueError("Gemini API candidate had no parts")
-    return parts[0].get("text", "").strip()
+    return _parse_gemini_response(resp.json())
 
 
 # ── Unified caller: try Vertex AI first, fall back to Gemini API key ──────────
 async def _call_ai(
     prompt: str,
     temperature: float = 0.7,
-    max_output_tokens: int = 500,
-    response_mime_type: str | None = None,
+    max_output_tokens: int = _CHAT_MAX_TOKENS,
+    response_mime_type: Optional[str] = None,
 ) -> tuple[str, str]:
     """Returns (text, model_used). Tries Vertex AI then Gemini API key."""
     # Try Vertex AI (works automatically on Cloud Run via service account)
@@ -194,16 +199,25 @@ async def _call_ai(
     raise RuntimeError("All AI providers failed")
 
 
-# ── Cache key ─────────────────────────────────────────────────────────────────
-def _get_cache_key(message: str, footprint_context: dict | None, session_id: str) -> str:
+# ── Cache helpers ─────────────────────────────────────────────────────────────
+def _get_cache_key(message: str, footprint_context: Optional[dict], session_id: str) -> str:
+    """Return a SHA-256 cache key for the given chat inputs."""
     ctx_str = json.dumps(footprint_context, sort_keys=True) if footprint_context else ""
     return hashlib.sha256(f"{session_id}:{message}:{ctx_str}".encode()).hexdigest()
+
+
+def _cache_set(key: str, value: tuple[str, str]) -> None:
+    """Insert into bounded cache, evicting oldest entry when full."""
+    if len(_ai_cache) >= _AI_CACHE_MAX_SIZE:
+        oldest_key = next(iter(_ai_cache))
+        del _ai_cache[oldest_key]
+    _ai_cache[key] = value
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def get_ai_response(
-    message: str, footprint_context: dict | None, session_id: str
+    message: str, footprint_context: Optional[dict], session_id: str
 ) -> tuple[str, str]:
     """Chat endpoint — returns (reply, model_used)."""
     cache_key = _get_cache_key(message, footprint_context, session_id)
@@ -218,8 +232,8 @@ async def get_ai_response(
     prompt = f"{system}\n\nUser: {message}\n\nEcoTrack AI:"
 
     try:
-        reply, model_used = await _call_ai(prompt, temperature=0.7, max_output_tokens=400)
-        _ai_cache[cache_key] = (reply, model_used)
+        reply, model_used = await _call_ai(prompt, temperature=0.7, max_output_tokens=_CHAT_MAX_TOKENS)
+        _cache_set(cache_key, (reply, model_used))
         return reply, model_used
     except Exception as e:
         logger.error(f"All AI providers failed for chat: {e}")
@@ -255,7 +269,12 @@ Return ONLY a JSON array of exactly 5 objects. Each object must have:
 "action" (string), "saving_kg" (positive float), "difficulty" ("Easy"/"Medium"/"Hard"), "category" ("transport"/"diet"/"energy"/"shopping").
 No markdown, no explanation, just the JSON array."""
 
-    text, _ = await _call_ai(prompt, temperature=0.2, max_output_tokens=800, response_mime_type="application/json")
+    text, _ = await _call_ai(
+        prompt,
+        temperature=0.2,
+        max_output_tokens=_TIPS_MAX_TOKENS,
+        response_mime_type="application/json",
+    )
 
     # Strip markdown fences if present
     text = text.strip()
@@ -319,6 +338,6 @@ Monthly emissions:
 Rules: Identify the highest emission category. Give positive reinforcement. Suggest one high-impact change.
 Under 80 words. Plain text only, no markdown, no bullet points."""
 
-    text, _ = await _call_ai(prompt, temperature=0.7, max_output_tokens=150)
+    text, _ = await _call_ai(prompt, temperature=0.7, max_output_tokens=_INSIGHTS_MAX_TOKENS)
     logger.info("Generated AI dashboard insight")
     return text
